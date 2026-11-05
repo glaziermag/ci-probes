@@ -1,0 +1,77 @@
+# Probe: does destroying the gloo process group at exit stop the
+# "terminate called without an active exception" SIGABRT seen in
+# Lightning-AI/pytorch-lightning scheduled CPU CI (test_swa_callback_ddp_cpu,
+# tests_fabric test_amp[cpu-*])? Mirrors ci-tests-pytorch.yml at 84df182f5
+# Same probe on ubuntu-24.04 (open PR #22010 moves CI there). (ubuntu-22.04, Python 3.12, torch 2.12 CPU, PACKAGE_NAME=pytorch).
+name: lt-gloo-exit-2404
+on:
+  push:
+    paths: [".github/workflows/lt-gloo-exit-2404.yml"]
+  workflow_dispatch:
+jobs:
+  loop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [base, fix]
+        shard: [1, 2, 3]
+    env:
+      PACKAGE_NAME: pytorch
+      TORCH_URL: "https://download.pytorch.org/whl/cpu/"
+      FREEZE_REQUIREMENTS: "false"
+      UV_TORCH_BACKEND: "cpu"
+      UV_EXCLUDE_NEWER: "2 days"
+      GLOO_SOCKET_IFNAME: eth0
+      ITER: "25"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: Lightning-AI/pytorch-lightning
+          ref: 84df182f50ab34301aabb3c0eb4031815bfb413d
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.12"
+          activate-environment: true
+      - name: Apply candidate fix (atexit destroy for every backend)
+        if: matrix.arm == 'fix'
+        run: |
+          python - <<'PY'
+          import pathlib
+          p = pathlib.Path("src/lightning/fabric/utilities/distributed.py")
+          s = p.read_text()
+          old = ('    if torch_distributed_backend == "nccl":\n'
+                 '        # PyTorch >= 2.4 warns about undestroyed NCCL process group, so we need to do it at program exit\n'
+                 '        atexit.register(_destroy_dist_connection)\n')
+          assert old in s, "patch anchor not found"
+          p.write_text(s.replace(old, '    atexit.register(_destroy_dist_connection)\n'))
+          PY
+          git diff --stat
+      - name: Install (as ci-tests-pytorch.yml, pytorch 2.12)
+        run: |
+          uv pip install -q -r .actions/requirements.txt
+          uv pip install -q -r requirements/ci.txt
+          python -m wget https://raw.githubusercontent.com/Lightning-AI/utilities/main/scripts/adjust-torch-versions.py
+          for fpath in `ls requirements/**/*.txt`; do python ./adjust-torch-versions.py $fpath 2.12; done
+          uv pip install ".[extra,test,strategies]" --upgrade --find-links="${TORCH_URL}"
+          uv pip install "setuptools<80.10.3"
+          uv pip uninstall lightning || true
+          python .actions/assistant.py copy_replace_imports --source_dir="./tests" \
+            --source_import="lightning.fabric,lightning.pytorch" --target_import="lightning_fabric,pytorch_lightning"
+          rm -rf src/
+          python -c "import torch; print('torch', torch.__version__)"
+          python -c "import inspect, lightning_fabric.utilities.distributed as d; s=inspect.getsource(d._init_dist_connection); print('ARM-CHECK', 'nccl-only' if 'if torch_distributed_backend == \"nccl\"' in s else 'all-backends')"
+      - name: Loop the two aborting tests
+        working-directory: tests
+        run: |
+          pl=0; pf=0; plt=0; fl=0; ff=0; flt=0
+          for i in $(seq 1 $ITER); do
+            ( cd tests_pytorch && python -m coverage run --source pytorch_lightning -m pytest \
+                callbacks/test_stochastic_weight_avg.py::test_swa_callback_ddp_cpu -q --timeout=90 -p no:cacheprovider ) > pl.txt 2>&1 && pl=$((pl+1)) || { fl=$((fl+1)); tail -n 30 pl.txt | sed "s/^/  PL[$i] /"; }
+            grep -q "terminate called without an active exception" pl.txt && plt=$((plt+1))
+            ( cd tests_fabric && python -m coverage run --source lightning_fabric -m pytest \
+                "plugins/precision/test_amp_integration.py::test_amp" -q --timeout=90 -p no:cacheprovider -k cpu ) > fa.txt 2>&1 && pf=$((pf+1)) || { ff=$((ff+1)); tail -n 30 fa.txt | sed "s/^/  FA[$i] /"; }
+            grep -q "terminate called without an active exception" fa.txt && flt=$((flt+1))
+          done
+          echo "RESULT arm=${{ matrix.arm }} shard=${{ matrix.shard }} swa_pass=$pl swa_fail=$fl swa_terminate=$plt amp_pass=$pf amp_fail=$ff amp_terminate=$flt"
