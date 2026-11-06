@@ -1,11 +1,9 @@
 # Upstream: delta-io/delta-rs .github/workflows/python_benchmark.yml @ ccaa2782 (2026-11-06)
-# Question: with a fixed actions/cache key, does benchmark-data.json ever advance past the run
-# that created the cache, and does a run_id key + restore-keys fix it?
-# base = the upstream "Download previous benchmark data" step (fixed key).
-# fix  = key ${{ runner.os }}-benchmark-<run_id> with restore-keys ${{ runner.os }}-benchmark.
-# The two arms use different key prefixes only so they can share this repository's cache.
+# Question: does ./cache/benchmark-data.json advance past the run that created the cache?
+# Arm 'base' runs on branch drv-base. Caches are branch-scoped, so the cache step below is
+# byte-for-byte the upstream step, unchanged.
 # Benchmark output is synthetic (dr-bench/value.txt); action SHAs match upstream.
-name: dr-bench-cache
+name: dr-bench-exact-base
 on:
   push:
     paths: [".github/workflows/dr-bench-cache.yml", "dr-bench/**"]
@@ -14,33 +12,18 @@ permissions:
   contents: read
 jobs:
   probe:
-    name: ${{ matrix.mode }}
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [base, fix]
     runs-on: ubuntu-latest
     steps:
       # v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: Download previous benchmark data (base, as upstream)
-        if: matrix.mode == 'base'
-        # v5.0.4
+      # Download previous benchmark result from cache (if exists)
+      - name: Download previous benchmark data
+        # v5.0.4 <https://github.com/actions/cache/releases/tag/v5.0.4>
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
         with:
           path: ./cache
-          key: ${{ runner.os }}-benchmark-base
-
-      - name: Download previous benchmark data (fix)
-        if: matrix.mode == 'fix'
-        # v5.0.4
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
-        with:
-          path: ./cache
-          key: ${{ runner.os }}-benchmark-fixarm-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-benchmark-fixarm
+          key: ${{ runner.os }}-benchmark
 
       - name: Show restored data
         run: python3 dr-bench/show.py cache/benchmark-data.json RESTORED
@@ -49,7 +32,7 @@ jobs:
         run: python3 dr-bench/fake.py output.json
 
       - name: Store benchmark result
-        # v1.21.0
+        # <https://github.com/benchmark-action/github-action-benchmark/releases/tag/v1.21.0>
         uses: benchmark-action/github-action-benchmark@a7bc2366eda11037936ea57d811a43b3418d3073
         with:
           tool: "pytest"
