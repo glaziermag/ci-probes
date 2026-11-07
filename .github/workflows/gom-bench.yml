@@ -20,9 +20,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run benchmark (synthetic)
         run: sh gom-bench/fake.sh > bench.txt && cat bench.txt
-      # Hosted runners have different CPUs (e.g. AMD EPYC 7763, 9V45, 9V74) and the
+      # hosted runners have different CPUs (e.g. AMD EPYC 7763, 9V45, 9V74) and the
       # timings differ by more than the alert threshold between them, so keep one
-      # baseline per CPU model.
+      # baseline per CPU model
       - name: Get CPU model
         id: cpu
         run: |
