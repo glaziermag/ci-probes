@@ -1,7 +1,7 @@
 # Probe for hairyhenderson/gomplate .github/workflows/benchmark.yml @ 82d457bb (2026-11-06)
 # Question: does ./cache/benchmark-data.json advance past the run that created the cache,
 # and which earlier run does the alert compare against?
-# Arm 'base' (branch gom-base): the cache step is byte-for-byte upstream lines 49-53.
+# Arm 'fix' (branch gom-fix): the CPU and cache steps are byte-for-byte the proposed PR.
 # Caches are branch-scoped, so the two arms cannot see each other's entries.
 # Benchmark output is synthetic (gom-bench/value.txt + the runner's real CPU); action refs match upstream.
 name: gom-bench
@@ -20,11 +20,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run benchmark (synthetic)
         run: sh gom-bench/fake.sh > bench.txt && cat bench.txt
+      # Hosted runners have different CPUs (e.g. AMD EPYC 7763, 9V45, 9V74) and the
+      # timings differ by more than the alert threshold between them, so keep one
+      # baseline per CPU model.
+      - name: Get CPU model
+        id: cpu
+        run: echo "model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2 | xargs | tr ' ' '-')" >> "$GITHUB_OUTPUT"
       - name: Download previous benchmark data
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ./cache
-          key: ${{ runner.os }}-benchmark
+          # a cache entry is never updated once saved, so save a new one on every
+          # run and restore the newest one for this CPU model
+          key: ${{ runner.os }}-benchmark-${{ steps.cpu.outputs.model }}-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-benchmark-${{ steps.cpu.outputs.model }}-
       - name: Show restored data
         run: python3 dr-bench/show.py cache/benchmark-data.json RESTORED
       - name: Store benchmark result
