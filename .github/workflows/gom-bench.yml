@@ -1,0 +1,44 @@
+# Probe for hairyhenderson/gomplate .github/workflows/benchmark.yml @ 82d457bb (2026-11-06)
+# Question: does ./cache/benchmark-data.json advance past the run that created the cache,
+# and which earlier run does the alert compare against?
+# Arm 'base' (branch gom-base): the cache step is byte-for-byte upstream lines 49-53.
+# Caches are branch-scoped, so the two arms cannot see each other's entries.
+# Benchmark output is synthetic (gom-bench/value.txt + the runner's real CPU); action refs match upstream.
+name: gom-bench
+on:
+  push:
+    branches: [gom-base, gom-fix]
+    paths: [".github/workflows/gom-bench.yml", "gom-bench/**"]
+  workflow_dispatch:
+permissions:
+  pull-requests: write
+  contents: write
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run benchmark (synthetic)
+        run: sh gom-bench/fake.sh > bench.txt && cat bench.txt
+      - name: Download previous benchmark data
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark
+      - name: Show restored data
+        run: python3 dr-bench/show.py cache/benchmark-data.json RESTORED
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'go'
+          output-file-path: bench.txt
+          external-data-json-path: ./cache/benchmark-data.json
+          fail-on-alert: true
+          comment-on-alert: true
+          # only comment on every PR run, not on pushes or the nightly run
+          comment-always: ${{ github.event_name == 'pull_request' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          alert-threshold: "200%"
+      - name: Show data after the action
+        if: always()
+        run: python3 dr-bench/show.py cache/benchmark-data.json AFTER
