@@ -1,0 +1,88 @@
+# Probe for project-zot/zot @ 68e541d9 (2026-11-08):
+#   .github/workflows/benchmark.yaml L30-49 (job "Performance regression check")
+#   .github/workflows/cluster.yaml   L284-303 (job "Stateless zot with minio (bolt|redis)")
+# Question: when the single-node key has no exact entry, which data file does the single-node
+# job restore and compare against, and does each history advance from run to run?
+# Arm base (branch zot-base): cache and benchmark steps are the upstream lines.
+# Bench output is synthetic: zb-style ci-cd.json with the values zot logged at 68e541d9.
+# Upstream runs the two workflows side by side; here the single-node job waits for the cluster
+# jobs so their entries exist when it restores. Caches are branch-scoped.
+name: zot-bench
+on:
+  push:
+    branches: [zot-base, zot-fix]
+permissions: read-all
+jobs:
+  cluster:
+    name: Stateless zot with minio (${{ matrix.backend }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        backend: [bolt, redis]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Write zb output (cluster values)
+        run: python3 zot-bench/fake.py ${{ matrix.backend }} > ci-cd.json
+      - name: Download previous benchmark data
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ./cache
+          # bolt keeps the historical key; redis appends -redis
+          key: ${{ runner.os }}-gen1-benchmark-stateless-cluster${{ matrix.backend == 'redis' && '-redis' || '' }}
+      - name: Show restored data
+        run: python3 zot-bench/show.py RESTORED
+      # Run `github-action-benchmark` action
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          # What benchmark tool the output.txt came from
+          tool: 'customBiggerIsBetter'
+          # Where the output from the benchmark tool is stored
+          output-file-path: ci-cd.json
+          # Where the previous data file is stored
+          external-data-json-path: ./cache/benchmark-data.json
+          # Workflow will fail when an alert happens
+          fail-on-alert: true
+          # Show data in the job summary
+          summary-always: true
+      - name: Show data after the action
+        if: always()
+        run: python3 zot-bench/show.py AFTER
+  benchmark:
+    name: Performance regression check
+    needs: cluster
+    if: ${{ !contains(github.event.head_commit.message, '[cluster-only]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Write zb output (single-node values)
+        run: python3 zot-bench/fake.py single > ci-cd.json
+      # Download previous benchmark result from cache (if exists)
+      - name: Download previous benchmark data
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-gen1-benchmark
+      - name: Show restored data
+        run: python3 zot-bench/show.py RESTORED
+      # Run `github-action-benchmark` action
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1.22.2
+        with:
+          # What benchmark tool the output.txt came from
+          tool: 'customBiggerIsBetter'
+          # Where the output from the benchmark tool is stored
+          output-file-path: ci-cd.json
+          # Where the previous data file is stored
+          external-data-json-path: ./cache/benchmark-data.json
+          # Workflow will fail when an alert happens
+          fail-on-alert: true
+          # Show data in the job summary
+          summary-always: true
+      - name: Show data after the action
+        if: always()
+        run: python3 zot-bench/show.py AFTER
