@@ -8,30 +8,16 @@ on:
     branches: [drv-cpu]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
 defaults:
   run:
     working-directory: ./python
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - name: Setup Environment
-        uses: ./.github/actions/setup-env
-      - name: Build wheel (ci profile, as python_benchmark.yml's make develop)
-        run: |
-          PROFILE=ci make build
-          mkdir -p wheel-out
-          find .. -path '*/target/wheels/deltalake-*.whl' -exec cp {} wheel-out/ \;
-          ls -l wheel-out
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheel
-          path: python/wheel-out/*.whl
-
   bench:
-    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,10 +35,16 @@ jobs:
         with:
           name: wheel
           path: wheel
+          run-id: 44761663680
+          github-token: ${{ github.token }}
       - name: Install dependencies and the prebuilt wheel
         run: |
           uv sync --no-install-project --all-extras
           uv pip install ../wheel/deltalake-*.whl
+          # maturin develop leaves the compiled extension in the source tree, which
+          # pytest imports from; put the wheel's copy there the same way
+          python3 -c "import glob, zipfile; z = zipfile.ZipFile(glob.glob('../wheel/deltalake-*.whl')[0]); [z.extract(n, '.') for n in z.namelist() if n.startswith('deltalake/_internal')]"
+          ls -l deltalake/_internal*
       - name: Runner CPU
         run: |
           grep -m1 '^model name' /proc/cpuinfo
