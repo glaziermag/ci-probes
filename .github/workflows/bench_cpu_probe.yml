@@ -1,0 +1,76 @@
+name: bench-cpu-probe
+
+# Probe for delta-io/delta-rs python_benchmark.yml: build one ci-profile wheel,
+# then run the same benchmark command on many ubuntu-latest runners and record
+# each runner's CPU model next to the measured ops/sec.
+on:
+  push:
+    branches: [drv-cpu]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: ./python
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+      - name: Build wheel (ci profile, as python_benchmark.yml's make develop)
+        run: |
+          PROFILE=ci make build
+          mkdir -p wheel-out
+          find .. -path '*/target/wheels/deltalake-*.whl' -exec cp {} wheel-out/ \;
+          ls -l wheel-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: python/wheel-out/*.whl
+
+  bench:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: wheel
+      - name: Install dependencies and the prebuilt wheel
+        run: |
+          uv sync --no-install-project --all-extras
+          uv pip install ../wheel/deltalake-*.whl
+      - name: Runner CPU
+        run: |
+          grep -m1 '^model name' /proc/cpuinfo
+          nproc
+      - name: Run benchmark (rep 1)
+        run: |
+          uv run --no-sync pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json out1.json
+      - name: Run benchmark (rep 2)
+        run: |
+          uv run --no-sync pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json out2.json
+      - name: Result line
+        run: |
+          cpu="$(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//')"
+          for f in out1.json out2.json; do
+            uv run --no-sync python -c "import json,sys; d=json.load(open(sys.argv[1])); o={b['name']:round(b['stats']['ops'],4) for b in d['benchmarks']}; print('RESULT', 'n=${{ matrix.n }}', sys.argv[1], 'nproc=' + sys.argv[2], 'read=' + str(o.get('test_benchmark_read')), 'read_pyarrow=' + str(o.get('test_benchmark_read_pyarrow')), 'cpu=' + sys.argv[3])" "$f" "$(nproc)" "$cpu"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.n }}
+          path: python/out*.json
+
