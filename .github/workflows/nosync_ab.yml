@@ -1,0 +1,51 @@
+name: drv-nosync-ab
+
+# Same-runner A/B for delta-io/delta-rs python_benchmark.yml at 92cbcd48: the
+# setup and build steps are verbatim from main; the benchmark then runs twice on
+# the same runner, first as `uv run --no-sync` (proposed), then as on main.
+on:
+  push:
+    branches: [drv-cpu]
+
+defaults:
+  run:
+    working-directory: ./python
+
+jobs:
+  benchmark:
+    name: Python Benchmark
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1, 2, 3, 4]
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build deltalake in release mode
+        run: |
+          PROFILE=ci make develop
+
+      - name: Runner CPU
+        run: |
+          grep -m1 '^model name' /proc/cpuinfo
+
+      - name: Run benchmark (proposed, uv run --no-sync)
+        run: |
+          uv run --no-sync pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json output_nosync.json
+
+      - name: Run benchmark (as on main)
+        run: |
+          uv run pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json output_main.json
+
+      - name: Result lines
+        run: |
+          cpu="$(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//')"
+          for f in output_nosync.json output_main.json; do
+            uv run --no-sync python -c "import json,sys; d=json.load(open(sys.argv[1])); o={b['name']:round(b['stats']['ops'],4) for b in d['benchmarks']}; print('RESULT', 'n=${{ matrix.n }}', sys.argv[1], 'read=' + str(o.get('test_benchmark_read')), 'read_pyarrow=' + str(o.get('test_benchmark_read_pyarrow')), 'cpu=' + sys.argv[2])" "$f" "$cpu"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
